@@ -1,0 +1,16 @@
+{
+    "bailian_api_key": "sk-xxx",
+    "bailian_app_id": "xxx",
+    "check_interval": 10,
+    "last_message_id": 0,
+    "is_running": true,
+    "enable_image_detection": true,
+    "use_file_watcher": true,
+    "force_check_interval": 60,
+    "auto_user_sessions": true,
+    "use_system_watcher": true,
+    "enable_web_search": true,
+    "system_prompt": "You are a helpful assistant",
+    "reasoning_effort": "high",
+    "enable_thinking": false
+}
