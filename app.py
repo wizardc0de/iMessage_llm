@@ -39,8 +39,12 @@ USER_SESSIONS_FILE = "user_sessions.json"
 
 # 默认配置
 DEFAULT_CONFIG = {
+    "llm_provider": "bailian",  # bailian 或 dify
     "bailian_api_key": "",  # 百炼 API Key
     "bailian_app_id": "",   # 百炼应用 ID
+    "dify_base_url": "https://api.dify.ai/v1",  # Dify 基础 URL
+    "dify_api_key": "",  # Dify API Key
+    "dify_inputs_key": "query",  # Dify 工作流输入变量名
     "check_interval": 10,  # 检查新消息的间隔（秒）
     "last_message_id": 0,  # 上次检查的最后一条消息ID
     "is_running": False,  # 是否正在运行检查
@@ -262,6 +266,103 @@ def test_bailian_connection():
         return False, f"连接错误: {str(e)}"
 
 
+def test_dify_connection():
+    """测试 Dify 工作流 API 连接"""
+    if not config.get("dify_api_key"):
+        return False, "Dify API 密钥未设置"
+
+    try:
+        url = f"{config['dify_base_url'].rstrip('/')}/workflows/run"
+        headers = {
+            "Authorization": f"Bearer {config['dify_api_key']}",
+            "Content-Type": "application/json",
+        }
+        request_data = {
+            "inputs": {config.get("dify_inputs_key", "query"): "你好"},
+            "response_mode": "blocking",
+            "user": "test-user",
+        }
+        response = requests.post(url, headers=headers, json=request_data, timeout=30)
+        if response.status_code == 200:
+            return True, "Dify 工作流连接成功"
+        else:
+            return False, f"连接失败: {response.status_code} - {response.text[:200]}"
+    except Exception as e:
+        return False, f"连接错误: {str(e)}"
+
+
+def _parse_dify_workflow_output(data):
+    """解析 Dify 工作流响应，提取回答文本"""
+    if "answer" in data and isinstance(data["answer"], str):
+        return data["answer"]
+
+    if "data" in data and "outputs" in data["data"]:
+        outputs = data["data"]["outputs"]
+        if isinstance(outputs, str):
+            return outputs
+        if isinstance(outputs, dict):
+            for key in ["text", "answer", "result", "output", "reply"]:
+                if key in outputs and isinstance(outputs[key], str):
+                    return outputs[key]
+            # 取第一个字符串值
+            for v in outputs.values():
+                if isinstance(v, str):
+                    return v
+
+    return json.dumps(data, ensure_ascii=False)
+
+
+def _call_dify_workflow(message_text, user_id=""):
+    """调用 Dify 工作流 API"""
+    headers = {
+        "Authorization": f"Bearer {config['dify_api_key']}",
+        "Content-Type": "application/json",
+    }
+    inputs_key = config.get("dify_inputs_key", "query")
+    request_data = {
+        "inputs": {inputs_key: message_text},
+        "response_mode": "blocking",
+        "user": user_id or "default-user",
+    }
+    url = f"{config['dify_base_url'].rstrip('/')}/workflows/run"
+    response = requests.post(url, headers=headers, json=request_data, timeout=120)
+    response.raise_for_status()
+    return response.json()
+
+
+def process_with_dify(message_text, phone_number=None):
+    """使用 Dify 工作流处理消息并获取回复"""
+    if not config.get("dify_api_key"):
+        add_log("Dify API 未配置，无法处理消息", "error")
+        return None
+
+    try:
+        user_id = ""
+        if phone_number:
+            user_session = user_session_manager.get_user_session(phone_number)
+            user_id = user_session.get("user_id", "")
+
+        data = _call_dify_workflow(message_text, user_id=user_id)
+        answer = process_reply_text(_parse_dify_workflow_output(data))
+
+        if phone_number:
+            user_session_manager.add_message(phone_number, "user", message_text)
+            user_session_manager.add_message(phone_number, "assistant", answer)
+
+        add_log(f"成功处理消息: '{message_text[:30]}...'", "success")
+        return answer
+
+    except requests.exceptions.Timeout:
+        add_log("Dify API 请求超时", "error")
+        return None
+    except requests.exceptions.ConnectionError:
+        add_log("无法连接到 Dify API", "error")
+        return None
+    except Exception as e:
+        add_log(f"Dify 处理消息错误: {str(e)}", "error")
+        return None
+
+
 def get_imessage_db_path():
     """获取iMessage数据库路径"""
     return os.path.expanduser("~/Library/Messages/chat.db")
@@ -334,9 +435,12 @@ def process_messages(messages):
             # 去除 @ 前缀后再传递给 AI
             text = text[1:].strip()
 
-            # 使用Kimi处理消息
+            # 使用 AI 处理消息
             print(f"处理消息: 开始处理消息")
-            reply = process_with_bailian(text, message["contact"])
+            if config.get("llm_provider") == "dify":
+                reply = process_with_dify(text, message["contact"])
+            else:
+                reply = process_with_bailian(text, message["contact"])
 
             # 只有当成功获取到回复时才发送
             if reply:
@@ -755,8 +859,12 @@ def index():
 @app.route("/save_config", methods=["POST"])
 def save_config_route():
     """保存配置"""
+    llm_provider = request.form.get("llm_provider", "bailian")
     bailian_api_key = request.form.get("bailian_api_key", "").strip()
     bailian_app_id = request.form.get("bailian_app_id", "").strip()
+    dify_base_url = request.form.get("dify_base_url", "https://api.dify.ai/v1").strip()
+    dify_api_key = request.form.get("dify_api_key", "").strip()
+    dify_inputs_key = request.form.get("dify_inputs_key", "query").strip()
     check_interval = int(request.form.get("check_interval", 10))
     force_check_interval = int(request.form.get("force_check_interval", 60))
 
@@ -780,8 +888,12 @@ def save_config_route():
     )
 
     # 更新配置
+    config["llm_provider"] = llm_provider
     config["bailian_api_key"] = bailian_api_key
     config["bailian_app_id"] = bailian_app_id
+    config["dify_base_url"] = dify_base_url
+    config["dify_api_key"] = dify_api_key
+    config["dify_inputs_key"] = dify_inputs_key
     config["check_interval"] = check_interval
     config["force_check_interval"] = force_check_interval
     config["enable_image_detection"] = enable_image_detection
@@ -842,63 +954,92 @@ def clear_all_sessions():
 
 @app.route("/test_connection", methods=["POST"])
 def test_connection():
-    """测试百炼应用连接"""
-    success, message = test_bailian_connection()
+    """测试 AI 平台连接"""
+    if config.get("llm_provider") == "dify":
+        success, message = test_dify_connection()
+    else:
+        success, message = test_bailian_connection()
     return jsonify({"success": success, "message": message})
 
 
 @app.route("/debug_llm", methods=["POST"])
 def debug_llm():
-    """调试百炼应用 API，返回详细的请求和响应"""
+    """调试 AI 平台 API，返回详细的请求和响应"""
     message = request.form.get("message", "")
     if not message:
         return jsonify({"success": False, "error": "请输入测试消息"})
 
-    if not config.get("bailian_api_key"):
-        return jsonify({"success": False, "error": "百炼 API 密钥未设置"})
-    if not config.get("bailian_app_id"):
-        return jsonify({"success": False, "error": "百炼应用 ID 未设置"})
+    provider = config.get("llm_provider", "bailian")
 
     try:
-        add_log(f"调试请求: {message[:50]}...", "info")
+        add_log(f"调试请求 ({provider}): {message[:50]}...", "info")
 
-        data = _call_bailian_api(message)
+        if provider == "dify":
+            if not config.get("dify_api_key"):
+                return jsonify({"success": False, "error": "Dify API 密钥未设置"})
 
-        request_data = {
-            "input": {"prompt": message},
-            "parameters": {},
-            "debug": {},
-        }
+            data = _call_dify_workflow(message, user_id="debug-user")
+            answer = _parse_dify_workflow_output(data)
 
-        if "output" in data and "text" in data["output"]:
-            content = data["output"]["text"]
-            add_log("调试请求成功", "success")
+            request_data = {
+                "inputs": {config.get("dify_inputs_key", "query"): message},
+                "response_mode": "blocking",
+                "user": "debug-user",
+            }
+
+            add_log("调试请求成功 (Dify)", "success")
             return jsonify(
                 {
                     "success": True,
-                    "content": content,
-                    "tool_history": [],  # 百炼应用内部处理工具调用，不暴露中间结果
+                    "content": answer,
+                    "tool_history": [],
                     "request": request_data,
                     "full_response": data,
                 }
             )
-        add_log(f"调试响应格式异常: {data}", "error")
-        return jsonify(
-            {
-                "success": False,
-                "error": "响应格式异常",
-                "tool_history": [],
-                "request": request_data,
-                "full_response": data,
+        else:
+            if not config.get("bailian_api_key"):
+                return jsonify({"success": False, "error": "百炼 API 密钥未设置"})
+            if not config.get("bailian_app_id"):
+                return jsonify({"success": False, "error": "百炼应用 ID 未设置"})
+
+            data = _call_bailian_api(message)
+
+            request_data = {
+                "input": {"prompt": message},
+                "parameters": {},
+                "debug": {},
             }
-        )
+
+            if "output" in data and "text" in data["output"]:
+                content = data["output"]["text"]
+                add_log("调试请求成功", "success")
+                return jsonify(
+                    {
+                        "success": True,
+                        "content": content,
+                        "tool_history": [],
+                        "request": request_data,
+                        "full_response": data,
+                    }
+                )
+            add_log(f"调试响应格式异常: {data}", "error")
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "响应格式异常",
+                    "tool_history": [],
+                    "request": request_data,
+                    "full_response": data,
+                }
+            )
 
     except requests.exceptions.Timeout:
         add_log("调试请求超时", "error")
         return jsonify({"success": False, "error": "请求超时"})
     except requests.exceptions.ConnectionError:
-        add_log("无法连接到百炼 API", "error")
-        return jsonify({"success": False, "error": "无法连接到百炼 API 服务器"})
+        add_log(f"无法连接到 {provider.upper()} API", "error")
+        return jsonify({"success": False, "error": f"无法连接到 {provider.upper()} API 服务器"})
     except Exception as e:
         add_log(f"调试错误: {str(e)}", "error")
         return jsonify({"success": False, "error": str(e)})
@@ -1044,7 +1185,8 @@ def start_app():
             add_log("启动消息监控失败，请检查权限设置", "error")
 
     # 启动Flask应用，禁用日志输出
-    print("iMessage-百炼 服务已启动，访问 http://127.0.0.1:8888 进行配置")
+    provider_name = config.get("llm_provider", "bailian").upper()
+    print(f"iMessage-{provider_name} 服务已启动，访问 http://127.0.0.1:8888 进行配置")
     app.run(host="0.0.0.0", port=8888, debug=False, use_reloader=False)
 
 

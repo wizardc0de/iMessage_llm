@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>iMessage-百炼 集成</title>
+    <title>iMessage AI 助手</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <style>
@@ -47,28 +47,68 @@
 </head>
 <body>
     <div class="container">
-        <h1 class="text-center mb-4">iMessage-百炼 集成</h1>
+        <h1 class="text-center mb-4">iMessage AI 助手</h1>
         
         <div class="row">
             <div class="col-md-6">
                 <div class="card">
                     <div class="card-header">
-                        <h5>百炼配置</h5>
+                        <h5>AI 平台配置</h5>
                     </div>
                     <div class="card-body">
                         <form action="/save_config" method="post" id="config-form">
                             <div class="mb-3">
-                                <label for="bailian_api_key" class="form-label">百炼 API 密钥</label>
-                                <input type="password" class="form-control" id="bailian_api_key" name="bailian_api_key" 
-                                       value="{{ config.bailian_api_key }}" placeholder="您的百炼API密钥">
-                                <div class="form-text">在 <a href="https://bailian.console.aliyun.com" target="_blank">阿里云百炼控制台</a> 获取 API 密钥</div>
+                                <label class="form-label">AI 平台</label>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="llm_provider" id="provider_bailian" value="bailian" {% if config.llm_provider != 'dify' %}checked{% endif %}>
+                                    <label class="form-check-label" for="provider_bailian">
+                                        阿里云百炼
+                                    </label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="llm_provider" id="provider_dify" value="dify" {% if config.llm_provider == 'dify' %}checked{% endif %}>
+                                    <label class="form-check-label" for="provider_dify">
+                                        Dify 工作流
+                                    </label>
+                                </div>
                             </div>
-                            <div class="mb-3">
-                                <label for="bailian_app_id" class="form-label">百炼应用 ID</label>
-                                <input type="text" class="form-control" id="bailian_app_id" name="bailian_app_id" 
-                                       value="{{ config.bailian_app_id }}" placeholder="您的百炼应用 ID">
-                                <div class="form-text">在百炼控制台创建应用后获取应用 ID</div>
+
+                            <div id="bailian-config" {% if config.llm_provider == 'dify' %}style="display:none;"{% endif %}>
+                                <div class="mb-3">
+                                    <label for="bailian_api_key" class="form-label">百炼 API 密钥</label>
+                                    <input type="password" class="form-control" id="bailian_api_key" name="bailian_api_key"
+                                           value="{{ config.bailian_api_key }}" placeholder="您的百炼API密钥">
+                                    <div class="form-text">在 <a href="https://bailian.console.aliyun.com" target="_blank">阿里云百炼控制台</a> 获取 API 密钥</div>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="bailian_app_id" class="form-label">百炼应用 ID</label>
+                                    <input type="text" class="form-control" id="bailian_app_id" name="bailian_app_id"
+                                           value="{{ config.bailian_app_id }}" placeholder="您的百炼应用 ID">
+                                    <div class="form-text">在百炼控制台创建应用后获取应用 ID</div>
+                                </div>
                             </div>
+
+                            <div id="dify-config" {% if config.llm_provider != 'dify' %}style="display:none;"{% endif %}>
+                                <div class="mb-3">
+                                    <label for="dify_base_url" class="form-label">Dify 基础 URL</label>
+                                    <input type="text" class="form-control" id="dify_base_url" name="dify_base_url"
+                                           value="{{ config.dify_base_url or 'https://api.dify.ai/v1' }}" placeholder="https://api.dify.ai/v1">
+                                    <div class="form-text">Dify API 地址，使用官方云服务请保持默认</div>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="dify_api_key" class="form-label">Dify API 密钥</label>
+                                    <input type="password" class="form-control" id="dify_api_key" name="dify_api_key"
+                                           value="{{ config.dify_api_key }}" placeholder="您的 Dify Workflow API 密钥">
+                                    <div class="form-text">在 <a href="https://cloud.dify.ai" target="_blank">Dify 控制台</a> 的工作流应用中获取 API 密钥</div>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="dify_inputs_key" class="form-label">工作流输入变量名</label>
+                                    <input type="text" class="form-control" id="dify_inputs_key" name="dify_inputs_key"
+                                           value="{{ config.dify_inputs_key or 'query' }}" placeholder="query">
+                                    <div class="form-text">工作流开始节点的输入变量名称，默认为 query</div>
+                                </div>
+                            </div>
+
                             <div class="mb-3">
                                 <label class="form-label">消息检查模式</label>
                                 <div class="form-check">
@@ -106,28 +146,28 @@
                                 <div class="form-text">即使在文件监控模式下，也会每隔此时间强制检查一次新消息（建议设置为较小的值，如10-30秒）</div>
                             </div>
                             <div class="mb-3">
-                                <label class="form-label">百炼高级选项</label>
+                                <label class="form-label">高级选项</label>
                                 <div class="card">
                                     <div class="card-body">
                                         <div class="mb-3 form-check">
-                                            <input type="checkbox" class="form-check-input" id="enable_image_detection" name="enable_image_detection" 
+                                            <input type="checkbox" class="form-check-input" id="enable_image_detection" name="enable_image_detection"
                                                    {% if config.enable_image_detection %}checked{% endif %}>
                                             <label class="form-check-label" for="enable_image_detection">启用图片链接检测</label>
-                                            <div class="form-text">自动检测消息中的图片链接并发送给百炼应用</div>
+                                            <div class="form-text">自动检测消息中的图片链接并发送给 AI 应用</div>
                                         </div>
-                                        <div class="mb-3 form-check">
-                                            <input type="checkbox" class="form-check-input" id="enable_web_search" name="enable_web_search" 
+                                        <div class="mb-3 form-check" id="web_search_container" {% if config.llm_provider == 'dify' %}style="display:none;"{% endif %}>
+                                            <input type="checkbox" class="form-check-input" id="enable_web_search" name="enable_web_search"
                                                    {% if config.enable_web_search %}checked{% endif %}>
                                             <label class="form-check-label" for="enable_web_search">启用联网搜索</label>
                                             <div class="form-text">让百炼应用可以搜索互联网获取实时信息（如新闻、天气等）</div>
                                         </div>
-                                        <div class="mb-3 form-check">
-                                            <input type="checkbox" class="form-check-input" id="enable_thinking" name="enable_thinking" 
+                                        <div class="mb-3 form-check" id="thinking_container" {% if config.llm_provider == 'dify' %}style="display:none;"{% endif %}>
+                                            <input type="checkbox" class="form-check-input" id="enable_thinking" name="enable_thinking"
                                                    {% if config.enable_thinking %}checked{% endif %}>
                                             <label class="form-check-label" for="enable_thinking">启用思考模式</label>
                                             <div class="form-text">开启后模型会展示思考过程（部分模型支持，关闭可减少 token 消耗）</div>
                                         </div>
-                                        
+
                                         <input type="hidden" id="auto_user_sessions" name="auto_user_sessions" value="true" checked>
                                     </div>
                                 </div>
@@ -238,7 +278,7 @@
                      </div>
                     <div class="card-body">
                         <ol>
-                            <li>设置百炼 API 密钥和应用 ID</li>
+                            <li>选择 AI 平台（百炼或 Dify）并填写对应配置</li>
                             <li>选择消息检查模式：
                                 <ul>
                                     <li><strong>定时查询</strong>：按固定时间间隔查询数据库中的新消息，适合所有环境</li>
@@ -248,7 +288,7 @@
                             <li>调整强制检查间隔：即使在文件监控模式下，也建议设置较短的强制检查间隔（10-30秒），以确保不会漏掉消息</li>
                             <li>测试连接确保配置正确</li>
                             <li>点击"启动服务"开始监听新消息</li>
-                            <li>收到新iMessage后，系统会自动使用百炼应用处理并回复</li>
+                            <li>收到新iMessage后，系统会自动使用选定的 AI 平台处理并回复</li>
                         </ol>
                         <p>系统会自动为每个iMessage用户创建独立的会话，保持对话上下文，无需手动配置。</p>
                         <p>您可以通过"查看用户会话"按钮查看所有用户的会话信息。</p>
@@ -270,20 +310,50 @@
         }
         document.addEventListener('DOMContentLoaded', function() {
             // 表单验证
+            function updateProviderUI() {
+                const isBailian = document.getElementById('provider_bailian').checked;
+                document.getElementById('bailian-config').style.display = isBailian ? 'block' : 'none';
+                document.getElementById('dify-config').style.display = isBailian ? 'none' : 'block';
+                document.getElementById('web_search_container').style.display = isBailian ? 'block' : 'none';
+                document.getElementById('thinking_container').style.display = isBailian ? 'block' : 'none';
+            }
+
+            document.querySelectorAll('input[name="llm_provider"]').forEach(function(radio) {
+                radio.addEventListener('change', updateProviderUI);
+            });
+
             document.getElementById('config-form').addEventListener('submit', function(event) {
-                const apiKeyInput = document.getElementById('bailian_api_key');
-                const appIdInput = document.getElementById('bailian_app_id');
-                const apiKey = apiKeyInput.value.trim();
-                const appId = appIdInput.value.trim();
-                
-                if (!apiKey) {
-                    event.preventDefault();
-                    alert('请填写百炼 API 密钥');
-                    apiKeyInput.focus();
-                } else if (!appId) {
-                    event.preventDefault();
-                    alert('请填写百炼应用 ID');
-                    appIdInput.focus();
+                const isBailian = document.getElementById('provider_bailian').checked;
+                if (isBailian) {
+                    const apiKeyInput = document.getElementById('bailian_api_key');
+                    const appIdInput = document.getElementById('bailian_app_id');
+                    if (!apiKeyInput.value.trim()) {
+                        event.preventDefault();
+                        alert('请填写百炼 API 密钥');
+                        apiKeyInput.focus();
+                        return;
+                    }
+                    if (!appIdInput.value.trim()) {
+                        event.preventDefault();
+                        alert('请填写百炼应用 ID');
+                        appIdInput.focus();
+                        return;
+                    }
+                } else {
+                    const difyKeyInput = document.getElementById('dify_api_key');
+                    const difyUrlInput = document.getElementById('dify_base_url');
+                    if (!difyKeyInput.value.trim()) {
+                        event.preventDefault();
+                        alert('请填写 Dify API 密钥');
+                        difyKeyInput.focus();
+                        return;
+                    }
+                    if (!difyUrlInput.value.trim()) {
+                        event.preventDefault();
+                        alert('请填写 Dify 基础 URL');
+                        difyUrlInput.focus();
+                        return;
+                    }
                 }
             });
             
