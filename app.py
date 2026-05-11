@@ -278,7 +278,7 @@ def test_dify_connection():
             url = f"{config['dify_base_url'].rstrip('/')}/workflows/run"
             request_data = {
                 "inputs": {config.get("dify_inputs_key", "query"): "你好"},
-                "response_mode": "blocking",
+                "response_mode": "streaming",
                 "user": "test-user",
             }
         else:
@@ -286,19 +286,20 @@ def test_dify_connection():
             request_data = {
                 "inputs": {},
                 "query": "你好",
-                "response_mode": "blocking",
+                "response_mode": "streaming",
                 "user": "test-user",
             }
         headers = {
             "Authorization": f"Bearer {config['dify_api_key']}",
             "Content-Type": "application/json",
         }
-        response = requests.post(url, headers=headers, json=request_data, timeout=30)
-        if response.status_code == 200:
-            mode_label = "工作流" if app_mode == "workflow" else "对话"
-            return True, f"Dify {mode_label}应用连接成功"
-        else:
-            return False, f"连接失败: {response.status_code} - {response.text[:200]}"
+        response = requests.post(url, headers=headers, json=request_data, stream=True, timeout=(10, 30))
+        response.raise_for_status()
+        answer, _, error_msg = _stream_dify_response(response, app_mode)
+        if error_msg:
+            return False, f"连接失败: {error_msg}"
+        mode_label = "工作流" if app_mode == "workflow" else "对话"
+        return True, f"Dify {mode_label}应用连接成功"
     except Exception as e:
         return False, f"连接错误: {str(e)}"
 
@@ -324,8 +325,59 @@ def _parse_dify_output(data):
     return json.dumps(data, ensure_ascii=False)
 
 
+def _stream_dify_response(response, app_mode):
+    """解析 Dify SSE 流，返回 (answer, conversation_id, error)"""
+    answer_parts = []
+    conversation_id = ""
+    error_msg = ""
+
+    for line in response.iter_lines(decode_unicode=True):
+        if not line:
+            continue
+        if line.startswith("data:"):
+            data_str = line[5:].strip()
+            if data_str == "[DONE]":
+                break
+            try:
+                event_data = json.loads(data_str)
+                event_type = event_data.get("event")
+
+                if event_type == "message":
+                    # Chat 模式的消息增量
+                    msg = event_data.get("answer", "")
+                    if msg:
+                        answer_parts.append(msg)
+                    cid = event_data.get("conversation_id")
+                    if cid:
+                        conversation_id = cid
+
+                elif event_type == "workflow_finished":
+                    # Workflow 模式结束事件
+                    outputs = event_data.get("data", {}).get("outputs", {})
+                    if isinstance(outputs, dict):
+                        for key in ["text", "answer", "result", "output", "reply"]:
+                            if key in outputs and isinstance(outputs[key], str):
+                                answer_parts.append(outputs[key])
+                                break
+                        else:
+                            for v in outputs.values():
+                                if isinstance(v, str):
+                                    answer_parts.append(v)
+                                    break
+                    elif isinstance(outputs, str):
+                        answer_parts.append(outputs)
+
+                elif event_type == "error":
+                    error_msg = event_data.get("message", "未知错误")
+
+            except json.JSONDecodeError:
+                continue
+
+    return "".join(answer_parts), conversation_id, error_msg
+
+
 def _call_dify_api(message_text, phone_number=None):
-    """调用 Dify API（自动根据 app_mode 选择端点）"""
+    """调用 Dify API（使用 streaming 模式避免 blocking 卡死）"""
     headers = {
         "Authorization": f"Bearer {config['dify_api_key']}",
         "Content-Type": "application/json",
@@ -346,7 +398,7 @@ def _call_dify_api(message_text, phone_number=None):
         inputs_key = config.get("dify_inputs_key", "query")
         request_data = {
             "inputs": {inputs_key: message_text},
-            "response_mode": "blocking",
+            "response_mode": "streaming",
             "user": user_id,
         }
     else:
@@ -354,31 +406,42 @@ def _call_dify_api(message_text, phone_number=None):
         request_data = {
             "inputs": {},
             "query": message_text,
-            "response_mode": "blocking",
+            "response_mode": "streaming",
             "conversation_id": conversation_id,
             "user": user_id,
         }
 
-    add_log(f"请求 Dify {app_mode} API: {url}, user={user_id}, msg_len={len(message_text)}", "info")
+    add_log(f"请求 Dify {app_mode} streaming API: {url}, user={user_id}, msg_len={len(message_text)}", "info")
     start_time = time.time()
     try:
-        # blocking 模式下大多数网关最大容忍 60~120s，这里用 60s 与常见网关对齐
-        response = requests.post(url, headers=headers, json=request_data, timeout=60)
-        elapsed = time.time() - start_time
-        add_log(f"Dify 响应返回: status={response.status_code},耗时={elapsed:.1f}s,len={len(response.text)}", "info")
+        # streaming 模式下用 stream=True，timeout=(连接, 单次读取)
+        # 单次读取 60s：只要服务器持续推送事件就不会超时
+        response = requests.post(url, headers=headers, json=request_data, stream=True, timeout=(10, 60))
         response.raise_for_status()
-        data = response.json()
+
+        answer, new_conversation_id, error_msg = _stream_dify_response(response, app_mode)
+        elapsed = time.time() - start_time
+        add_log(f"Dify streaming 完成: 耗时={elapsed:.1f}s, answer_len={len(answer)}, error={error_msg or '无'}", "info")
+
+        if error_msg:
+            raise Exception(f"Dify 返回错误: {error_msg}")
+
+        # 构造与原来 blocking 模式兼容的数据结构
+        data = {"answer": answer}
+        if new_conversation_id:
+            data["conversation_id"] = new_conversation_id
         return data
+
     except requests.exceptions.Timeout:
         elapsed = time.time() - start_time
-        add_log(f"Dify API 请求超时(>{elapsed:.0f}s)", "error")
+        add_log(f"Dify API streaming 超时(>{elapsed:.0f}s)", "error")
         raise
     except requests.exceptions.HTTPError as e:
         add_log(f"Dify API HTTP错误: {e.response.status_code} - {e.response.text[:300]}", "error")
         raise
     except Exception as e:
         elapsed = time.time() - start_time
-        add_log(f"Dify API 请求异常({elapsed:.1f}s): {str(e)}", "error")
+        add_log(f"Dify API streaming 异常({elapsed:.1f}s): {str(e)}", "error")
         raise
 
 
@@ -1040,14 +1103,14 @@ def debug_llm():
             if app_mode == "workflow":
                 request_data = {
                     "inputs": {config.get("dify_inputs_key", "query"): message},
-                    "response_mode": "blocking",
+                    "response_mode": "streaming",
                     "user": "debug-user",
                 }
             else:
                 request_data = {
                     "inputs": {},
                     "query": message,
-                    "response_mode": "blocking",
+                    "response_mode": "streaming",
                     "conversation_id": "",
                     "user": "debug-user",
                 }
