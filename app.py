@@ -359,9 +359,27 @@ def _call_dify_api(message_text, phone_number=None):
             "user": user_id,
         }
 
-    response = requests.post(url, headers=headers, json=request_data, timeout=120)
-    response.raise_for_status()
-    return response.json()
+    add_log(f"请求 Dify {app_mode} API: {url}, user={user_id}, msg_len={len(message_text)}", "info")
+    start_time = time.time()
+    try:
+        # blocking 模式下大多数网关最大容忍 60~120s，这里用 60s 与常见网关对齐
+        response = requests.post(url, headers=headers, json=request_data, timeout=60)
+        elapsed = time.time() - start_time
+        add_log(f"Dify 响应返回: status={response.status_code},耗时={elapsed:.1f}s,len={len(response.text)}", "info")
+        response.raise_for_status()
+        data = response.json()
+        return data
+    except requests.exceptions.Timeout:
+        elapsed = time.time() - start_time
+        add_log(f"Dify API 请求超时(>{elapsed:.0f}s)", "error")
+        raise
+    except requests.exceptions.HTTPError as e:
+        add_log(f"Dify API HTTP错误: {e.response.status_code} - {e.response.text[:300]}", "error")
+        raise
+    except Exception as e:
+        elapsed = time.time() - start_time
+        add_log(f"Dify API 请求异常({elapsed:.1f}s): {str(e)}", "error")
+        raise
 
 
 def process_with_dify(message_text, phone_number=None):
