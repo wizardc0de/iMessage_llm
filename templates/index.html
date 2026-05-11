@@ -90,6 +90,23 @@
 
                             <div id="dify-config" {% if config.llm_provider != 'dify' %}style="display:none;"{% endif %}>
                                 <div class="mb-3">
+                                    <label class="form-label">Dify 应用类型</label>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="radio" name="dify_app_mode" id="dify_mode_chat" value="chat" {% if config.dify_app_mode != 'workflow' %}checked{% endif %}>
+                                        <label class="form-check-label" for="dify_mode_chat">
+                                            Chatbot / Agent（对话应用）
+                                        </label>
+                                        <div class="form-text">使用 /chat-messages 端点，自动维持多轮对话上下文，推荐</div>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="radio" name="dify_app_mode" id="dify_mode_workflow" value="workflow" {% if config.dify_app_mode == 'workflow' %}checked{% endif %}>
+                                        <label class="form-check-label" for="dify_mode_workflow">
+                                            Workflow（工作流）
+                                        </label>
+                                        <div class="form-text">使用 /workflows/run 端点，适合固定流程处理</div>
+                                    </div>
+                                </div>
+                                <div class="mb-3">
                                     <label for="dify_base_url" class="form-label">Dify 基础 URL</label>
                                     <input type="text" class="form-control" id="dify_base_url" name="dify_base_url"
                                            value="{{ config.dify_base_url or 'https://api.dify.ai/v1' }}" placeholder="https://api.dify.ai/v1">
@@ -98,14 +115,14 @@
                                 <div class="mb-3">
                                     <label for="dify_api_key" class="form-label">Dify API 密钥</label>
                                     <input type="password" class="form-control" id="dify_api_key" name="dify_api_key"
-                                           value="{{ config.dify_api_key }}" placeholder="您的 Dify Workflow API 密钥">
-                                    <div class="form-text">在 <a href="https://cloud.dify.ai" target="_blank">Dify 控制台</a> 的工作流应用中获取 API 密钥</div>
+                                           value="{{ config.dify_api_key }}" placeholder="您的 Dify API 密钥">
+                                    <div class="form-text">在 <a href="https://cloud.dify.ai" target="_blank">Dify 控制台</a> 的应用发布页获取 API 密钥</div>
                                 </div>
-                                <div class="mb-3">
+                                <div class="mb-3" id="dify_inputs_key_container" {% if config.dify_app_mode != 'workflow' %}style="display:none;"{% endif %}>
                                     <label for="dify_inputs_key" class="form-label">工作流输入变量名</label>
                                     <input type="text" class="form-control" id="dify_inputs_key" name="dify_inputs_key"
                                            value="{{ config.dify_inputs_key or 'query' }}" placeholder="query">
-                                    <div class="form-text">工作流开始节点的输入变量名称，默认为 query</div>
+                                    <div class="form-text">工作流开始节点的输入变量名称，仅 Workflow 模式有效</div>
                                 </div>
                             </div>
 
@@ -310,16 +327,27 @@
         }
         document.addEventListener('DOMContentLoaded', function() {
             // 表单验证
+            function updateDifyModeUI() {
+                const isWorkflow = document.getElementById('dify_mode_workflow').checked;
+                const container = document.getElementById('dify_inputs_key_container');
+                if (container) container.style.display = isWorkflow ? 'block' : 'none';
+            }
+
             function updateProviderUI() {
                 const isBailian = document.getElementById('provider_bailian').checked;
                 document.getElementById('bailian-config').style.display = isBailian ? 'block' : 'none';
                 document.getElementById('dify-config').style.display = isBailian ? 'none' : 'block';
                 document.getElementById('web_search_container').style.display = isBailian ? 'block' : 'none';
                 document.getElementById('thinking_container').style.display = isBailian ? 'block' : 'none';
+                if (!isBailian) updateDifyModeUI();
             }
 
             document.querySelectorAll('input[name="llm_provider"]').forEach(function(radio) {
                 radio.addEventListener('change', updateProviderUI);
+            });
+
+            document.querySelectorAll('input[name="dify_app_mode"]').forEach(function(radio) {
+                radio.addEventListener('change', updateDifyModeUI);
             });
 
             document.getElementById('config-form').addEventListener('submit', function(event) {

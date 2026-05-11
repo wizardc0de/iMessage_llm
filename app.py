@@ -44,7 +44,8 @@ DEFAULT_CONFIG = {
     "bailian_app_id": "",   # 百炼应用 ID
     "dify_base_url": "https://api.dify.ai/v1",  # Dify 基础 URL
     "dify_api_key": "",  # Dify API Key
-    "dify_inputs_key": "query",  # Dify 工作流输入变量名
+    "dify_app_mode": "chat",  # dify 应用类型: chat 或 workflow
+    "dify_inputs_key": "query",  # Dify 工作流输入变量名（仅 workflow 模式有效）
     "check_interval": 10,  # 检查新消息的间隔（秒）
     "last_message_id": 0,  # 上次检查的最后一条消息ID
     "is_running": False,  # 是否正在运行检查
@@ -267,32 +268,43 @@ def test_bailian_connection():
 
 
 def test_dify_connection():
-    """测试 Dify 工作流 API 连接"""
+    """测试 Dify API 连接"""
     if not config.get("dify_api_key"):
         return False, "Dify API 密钥未设置"
 
     try:
-        url = f"{config['dify_base_url'].rstrip('/')}/workflows/run"
+        app_mode = config.get("dify_app_mode", "chat")
+        if app_mode == "workflow":
+            url = f"{config['dify_base_url'].rstrip('/')}/workflows/run"
+            request_data = {
+                "inputs": {config.get("dify_inputs_key", "query"): "你好"},
+                "response_mode": "blocking",
+                "user": "test-user",
+            }
+        else:
+            url = f"{config['dify_base_url'].rstrip('/')}/chat-messages"
+            request_data = {
+                "inputs": {},
+                "query": "你好",
+                "response_mode": "blocking",
+                "user": "test-user",
+            }
         headers = {
             "Authorization": f"Bearer {config['dify_api_key']}",
             "Content-Type": "application/json",
         }
-        request_data = {
-            "inputs": {config.get("dify_inputs_key", "query"): "你好"},
-            "response_mode": "blocking",
-            "user": "test-user",
-        }
         response = requests.post(url, headers=headers, json=request_data, timeout=30)
         if response.status_code == 200:
-            return True, "Dify 工作流连接成功"
+            mode_label = "工作流" if app_mode == "workflow" else "对话"
+            return True, f"Dify {mode_label}应用连接成功"
         else:
             return False, f"连接失败: {response.status_code} - {response.text[:200]}"
     except Exception as e:
         return False, f"连接错误: {str(e)}"
 
 
-def _parse_dify_workflow_output(data):
-    """解析 Dify 工作流响应，提取回答文本"""
+def _parse_dify_output(data):
+    """解析 Dify 响应，提取回答文本"""
     if "answer" in data and isinstance(data["answer"], str):
         return data["answer"]
 
@@ -312,38 +324,61 @@ def _parse_dify_workflow_output(data):
     return json.dumps(data, ensure_ascii=False)
 
 
-def _call_dify_workflow(message_text, user_id=""):
-    """调用 Dify 工作流 API"""
+def _call_dify_api(message_text, phone_number=None):
+    """调用 Dify API（自动根据 app_mode 选择端点）"""
     headers = {
         "Authorization": f"Bearer {config['dify_api_key']}",
         "Content-Type": "application/json",
     }
-    inputs_key = config.get("dify_inputs_key", "query")
-    request_data = {
-        "inputs": {inputs_key: message_text},
-        "response_mode": "blocking",
-        "user": user_id or "default-user",
-    }
-    url = f"{config['dify_base_url'].rstrip('/')}/workflows/run"
+    app_mode = config.get("dify_app_mode", "chat")
+    user_id = ""
+    conversation_id = ""
+
+    if phone_number:
+        user_session = user_session_manager.get_user_session(phone_number)
+        user_id = user_session.get("user_id", "")
+        conversation_id = user_session.get("conversation_id", "")
+
+    user_id = user_id or "default-user"
+
+    if app_mode == "workflow":
+        url = f"{config['dify_base_url'].rstrip('/')}/workflows/run"
+        inputs_key = config.get("dify_inputs_key", "query")
+        request_data = {
+            "inputs": {inputs_key: message_text},
+            "response_mode": "blocking",
+            "user": user_id,
+        }
+    else:
+        url = f"{config['dify_base_url'].rstrip('/')}/chat-messages"
+        request_data = {
+            "inputs": {},
+            "query": message_text,
+            "response_mode": "blocking",
+            "conversation_id": conversation_id,
+            "user": user_id,
+        }
+
     response = requests.post(url, headers=headers, json=request_data, timeout=120)
     response.raise_for_status()
     return response.json()
 
 
 def process_with_dify(message_text, phone_number=None):
-    """使用 Dify 工作流处理消息并获取回复"""
+    """使用 Dify 处理消息并获取回复"""
     if not config.get("dify_api_key"):
         add_log("Dify API 未配置，无法处理消息", "error")
         return None
 
     try:
-        user_id = ""
-        if phone_number:
-            user_session = user_session_manager.get_user_session(phone_number)
-            user_id = user_session.get("user_id", "")
+        data = _call_dify_api(message_text, phone_number=phone_number)
+        answer = process_reply_text(_parse_dify_output(data))
 
-        data = _call_dify_workflow(message_text, user_id=user_id)
-        answer = process_reply_text(_parse_dify_workflow_output(data))
+        # 保存 Dify 返回的 conversation_id（对话模式下用于维持上下文）
+        new_conversation_id = data.get("conversation_id", "")
+        if phone_number and new_conversation_id:
+            user_session_manager.sessions[phone_number]["conversation_id"] = new_conversation_id
+            user_session_manager.save_sessions()
 
         if phone_number:
             user_session_manager.add_message(phone_number, "user", message_text)
@@ -864,6 +899,7 @@ def save_config_route():
     bailian_app_id = request.form.get("bailian_app_id", "").strip()
     dify_base_url = request.form.get("dify_base_url", "https://api.dify.ai/v1").strip()
     dify_api_key = request.form.get("dify_api_key", "").strip()
+    dify_app_mode = request.form.get("dify_app_mode", "chat").strip()
     dify_inputs_key = request.form.get("dify_inputs_key", "query").strip()
     check_interval = int(request.form.get("check_interval", 10))
     force_check_interval = int(request.form.get("force_check_interval", 60))
@@ -893,6 +929,7 @@ def save_config_route():
     config["bailian_app_id"] = bailian_app_id
     config["dify_base_url"] = dify_base_url
     config["dify_api_key"] = dify_api_key
+    config["dify_app_mode"] = dify_app_mode
     config["dify_inputs_key"] = dify_inputs_key
     config["check_interval"] = check_interval
     config["force_check_interval"] = force_check_interval
@@ -978,14 +1015,24 @@ def debug_llm():
             if not config.get("dify_api_key"):
                 return jsonify({"success": False, "error": "Dify API 密钥未设置"})
 
-            data = _call_dify_workflow(message, user_id="debug-user")
-            answer = _parse_dify_workflow_output(data)
+            data = _call_dify_api(message, phone_number="debug-user")
+            answer = _parse_dify_output(data)
 
-            request_data = {
-                "inputs": {config.get("dify_inputs_key", "query"): message},
-                "response_mode": "blocking",
-                "user": "debug-user",
-            }
+            app_mode = config.get("dify_app_mode", "chat")
+            if app_mode == "workflow":
+                request_data = {
+                    "inputs": {config.get("dify_inputs_key", "query"): message},
+                    "response_mode": "blocking",
+                    "user": "debug-user",
+                }
+            else:
+                request_data = {
+                    "inputs": {},
+                    "query": message,
+                    "response_mode": "blocking",
+                    "conversation_id": "",
+                    "user": "debug-user",
+                }
 
             add_log("调试请求成功 (Dify)", "success")
             return jsonify(
