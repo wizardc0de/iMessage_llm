@@ -77,4 +77,4 @@ fi
 # 运行应用
 echo -e "${GREEN}启动应用程序...${NC}"
 echo -e "${GREEN}访问地址: http://localhost:8888${NC}"
-python app.py 2>&1 | tee -a app.log 
+python3 app.py 2>&1 | tee -a app.log 
