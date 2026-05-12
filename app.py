@@ -347,10 +347,16 @@ def _stream_dify_response(response, app_mode):
                 raw_events.append(event_type or "(no event)")
 
                 if event_type == "message":
-                    # Chat 模式的消息增量
+                    # Chat 模式：answer 可能是完整文本或增量，做兼容处理
                     msg = event_data.get("answer", "")
                     if msg:
-                        answer_parts.append(msg)
+                        current = "".join(answer_parts)
+                        if msg.startswith(current) and len(msg) > len(current):
+                            # 增量模式，只追加新增部分
+                            answer_parts.append(msg[len(current):])
+                        else:
+                            # 完整文本模式，直接覆盖
+                            answer_parts = [msg]
                     cid = event_data.get("conversation_id")
                     if cid:
                         conversation_id = cid
@@ -361,28 +367,28 @@ def _stream_dify_response(response, app_mode):
                     if isinstance(outputs, dict):
                         for key in ["text", "answer", "result", "output", "reply"]:
                             if key in outputs and isinstance(outputs[key], str):
-                                answer_parts.append(outputs[key])
+                                answer_parts = [outputs[key]]
                                 break
                         else:
                             for v in outputs.values():
                                 if isinstance(v, str):
-                                    answer_parts.append(v)
+                                    answer_parts = [v]
                                     break
                     elif isinstance(outputs, str):
-                        answer_parts.append(outputs)
+                        answer_parts = [outputs]
 
                 elif event_type == "error":
                     error_msg = event_data.get("message", "未知错误")
 
                 # 兜底：任何事件中如果直接包含 answer 或 outputs 都尝试提取
                 if not answer_parts and "answer" in event_data and isinstance(event_data["answer"], str):
-                    answer_parts.append(event_data["answer"])
+                    answer_parts = [event_data["answer"]]
                 if not answer_parts and "outputs" in event_data:
                     outs = event_data["outputs"]
                     if isinstance(outs, dict):
                         for key in ["text", "answer", "result", "output", "reply"]:
                             if key in outs and isinstance(outs[key], str):
-                                answer_parts.append(outs[key])
+                                answer_parts = [outs[key]]
                                 break
 
             except json.JSONDecodeError:
