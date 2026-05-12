@@ -295,9 +295,11 @@ def test_dify_connection():
         }
         response = requests.post(url, headers=headers, json=request_data, stream=True, timeout=(10, 30))
         response.raise_for_status()
-        answer, _, error_msg = _stream_dify_response(response, app_mode)
+        answer, _, error_msg, raw_events = _stream_dify_response(response, app_mode)
         if error_msg:
             return False, f"连接失败: {error_msg}"
+        if not answer:
+            return False, f"连接成功但返回空内容，事件: {raw_events}"
         mode_label = "工作流" if app_mode == "workflow" else "对话"
         return True, f"Dify {mode_label}应用连接成功"
     except Exception as e:
@@ -326,10 +328,11 @@ def _parse_dify_output(data):
 
 
 def _stream_dify_response(response, app_mode):
-    """解析 Dify SSE 流，返回 (answer, conversation_id, error)"""
+    """解析 Dify SSE 流，返回 (answer, conversation_id, error, raw_events)"""
     answer_parts = []
     conversation_id = ""
     error_msg = ""
+    raw_events = []  # 记录原始事件用于调试
 
     for line in response.iter_lines(decode_unicode=True):
         if not line:
@@ -341,6 +344,7 @@ def _stream_dify_response(response, app_mode):
             try:
                 event_data = json.loads(data_str)
                 event_type = event_data.get("event")
+                raw_events.append(event_type or "(no event)")
 
                 if event_type == "message":
                     # Chat 模式的消息增量
@@ -370,10 +374,25 @@ def _stream_dify_response(response, app_mode):
                 elif event_type == "error":
                     error_msg = event_data.get("message", "未知错误")
 
+                # 兜底：任何事件中如果直接包含 answer 或 outputs 都尝试提取
+                if not answer_parts and "answer" in event_data and isinstance(event_data["answer"], str):
+                    answer_parts.append(event_data["answer"])
+                if not answer_parts and "outputs" in event_data:
+                    outs = event_data["outputs"]
+                    if isinstance(outs, dict):
+                        for key in ["text", "answer", "result", "output", "reply"]:
+                            if key in outs and isinstance(outs[key], str):
+                                answer_parts.append(outs[key])
+                                break
+
             except json.JSONDecodeError:
                 continue
 
-    return "".join(answer_parts), conversation_id, error_msg
+        # 限制原始事件记录数量
+        if len(raw_events) > 20:
+            raw_events = raw_events[:20]
+
+    return "".join(answer_parts), conversation_id, error_msg, raw_events
 
 
 def _call_dify_api(message_text, phone_number=None):
@@ -419,12 +438,15 @@ def _call_dify_api(message_text, phone_number=None):
         response = requests.post(url, headers=headers, json=request_data, stream=True, timeout=(10, 60))
         response.raise_for_status()
 
-        answer, new_conversation_id, error_msg = _stream_dify_response(response, app_mode)
+        answer, new_conversation_id, error_msg, raw_events = _stream_dify_response(response, app_mode)
         elapsed = time.time() - start_time
-        add_log(f"Dify streaming 完成: 耗时={elapsed:.1f}s, answer_len={len(answer)}, error={error_msg or '无'}", "info")
+        add_log(f"Dify streaming 完成: 耗时={elapsed:.1f}s, answer_len={len(answer)}, error={error_msg or '无'}, events={raw_events}", "info")
 
         if error_msg:
             raise Exception(f"Dify 返回错误: {error_msg}")
+
+        if not answer:
+            add_log(f"Dify 返回空 answer，原始事件: {raw_events}", "warning")
 
         # 构造与原来 blocking 模式兼容的数据结构
         data = {"answer": answer}
@@ -559,7 +581,13 @@ def process_messages(messages):
                 reply = process_with_bailian(text, message["contact"])
 
             # 只有当成功获取到回复时才发送
-            if reply:
+            if reply is None:
+                print(f"处理消息: 处理消息时出错，跳过发送")
+                add_log(f"跳过发送回复，因为处理消息时出错", "warning")
+            elif reply == "":
+                print(f"处理消息: AI 返回空回复，跳过发送")
+                add_log(f"跳过发送回复，因为 AI 返回内容为空", "warning")
+            else:
                 print(f"处理消息: 获取到回复，准备发送")
                 success, result = send_imessage(message["contact"], reply)
                 if not success:
@@ -568,9 +596,6 @@ def process_messages(messages):
                 else:
                     print(f"处理消息: 成功发送回复给 {message['contact']}")
                     add_log(f"成功回复消息给 {message['contact']}", "success")
-            else:
-                print(f"处理消息: 处理消息时出错，跳过发送")
-                add_log(f"跳过发送回复，因为处理消息时出错", "warning")
     except Exception as e:
         print(f"处理消息: 错误: {str(e)}")
         add_log(f"处理新消息错误: {str(e)}", "error")
