@@ -4,7 +4,7 @@
     "bailian_app_id": "xxx",
     "dify_base_url": "http://39.104.19.196/v1",
     "dify_api_key": "app-PK6CceuIiE3bAMRsjcANLGRH",
-    "dify_app_mode": "chat",
+    "dify_app_mode": "workflow",
     "dify_inputs_key": "query",
     "check_interval": 10,
     "last_message_id": 0,

@@ -273,22 +273,13 @@ def test_dify_connection():
         return False, "Dify API 密钥未设置"
 
     try:
-        app_mode = config.get("dify_app_mode", "chat")
-        if app_mode == "workflow":
-            url = f"{config['dify_base_url'].rstrip('/')}/workflows/run"
-            request_data = {
-                "inputs": {config.get("dify_inputs_key", "query"): "你好"},
-                "response_mode": "streaming",
-                "user": "test-user",
-            }
-        else:
-            url = f"{config['dify_base_url'].rstrip('/')}/chat-messages"
-            request_data = {
-                "inputs": {},
-                "query": "你好",
-                "response_mode": "streaming",
-                "user": "test-user",
-            }
+        url = f"{config['dify_base_url'].rstrip('/')}/chat-messages"
+        request_data = {
+            "inputs": {},
+            "query": "你好",
+            "response_mode": "streaming",
+            "user": "test-user",
+        }
         headers = {
             "Authorization": f"Bearer {config['dify_api_key']}",
             "Content-Type": "application/json",
@@ -418,23 +409,15 @@ def _call_dify_api(message_text, phone_number=None):
 
     user_id = user_id or "default-user"
 
-    if app_mode == "workflow":
-        url = f"{config['dify_base_url'].rstrip('/')}/workflows/run"
-        inputs_key = config.get("dify_inputs_key", "query")
-        request_data = {
-            "inputs": {inputs_key: message_text},
-            "response_mode": "streaming",
-            "user": user_id,
-        }
-    else:
-        url = f"{config['dify_base_url'].rstrip('/')}/chat-messages"
-        request_data = {
-            "inputs": {},
-            "query": message_text,
-            "response_mode": "streaming",
-            "conversation_id": conversation_id,
-            "user": user_id,
-        }
+    # 统一使用 /chat-messages 端点，参数同 chat-app 模式
+    url = f"{config['dify_base_url'].rstrip('/')}/chat-messages"
+    request_data = {
+        "inputs": {},
+        "query": message_text,
+        "response_mode": "streaming",
+        "conversation_id": conversation_id,
+        "user": user_id,
+    }
 
     add_log(f"请求 Dify {app_mode} streaming API: {url}, user={user_id}, msg_len={len(message_text)}", "info")
     start_time = time.time()
@@ -489,20 +472,13 @@ def process_with_dify(message_text, phone_number=None):
             conversation_id = user_session.get("conversation_id", "")
         user_id = user_id or "default-user"
 
-        if app_mode == "workflow":
-            request_data = {
-                "inputs": {config.get("dify_inputs_key", "query"): message_text},
-                "response_mode": "streaming",
-                "user": user_id,
-            }
-        else:
-            request_data = {
-                "inputs": {},
-                "query": message_text,
-                "response_mode": "streaming",
-                "conversation_id": conversation_id,
-                "user": user_id,
-            }
+        request_data = {
+            "inputs": {},
+            "query": message_text,
+            "response_mode": "streaming",
+            "conversation_id": conversation_id,
+            "user": user_id,
+        }
 
         add_log(f"Dify 请求: {json.dumps(request_data, ensure_ascii=False)[:200]}", "info")
         data = _call_dify_api(message_text, phone_number=phone_number)
@@ -1167,21 +1143,13 @@ def debug_llm():
             data = _call_dify_api(message, phone_number="debug-user")
             answer = _parse_dify_output(data)
 
-            app_mode = config.get("dify_app_mode", "chat")
-            if app_mode == "workflow":
-                request_data = {
-                    "inputs": {config.get("dify_inputs_key", "query"): message},
-                    "response_mode": "streaming",
-                    "user": "debug-user",
-                }
-            else:
-                request_data = {
-                    "inputs": {},
-                    "query": message,
-                    "response_mode": "streaming",
-                    "conversation_id": "",
-                    "user": "debug-user",
-                }
+            request_data = {
+                "inputs": {},
+                "query": message,
+                "response_mode": "streaming",
+                "conversation_id": "",
+                "user": "debug-user",
+            }
 
             add_log("调试请求成功 (Dify)", "success")
             return jsonify(
