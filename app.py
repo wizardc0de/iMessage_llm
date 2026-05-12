@@ -480,7 +480,34 @@ def process_with_dify(message_text, phone_number=None):
         return None
 
     try:
+        app_mode = config.get("dify_app_mode", "chat")
+        user_id = ""
+        conversation_id = ""
+        if phone_number:
+            user_session = user_session_manager.get_user_session(phone_number)
+            user_id = user_session.get("user_id", "")
+            conversation_id = user_session.get("conversation_id", "")
+        user_id = user_id or "default-user"
+
+        if app_mode == "workflow":
+            request_data = {
+                "inputs": {config.get("dify_inputs_key", "query"): message_text},
+                "response_mode": "streaming",
+                "user": user_id,
+            }
+        else:
+            request_data = {
+                "inputs": {},
+                "query": message_text,
+                "response_mode": "streaming",
+                "conversation_id": conversation_id,
+                "user": user_id,
+            }
+
+        add_log(f"Dify 请求: {json.dumps(request_data, ensure_ascii=False)[:200]}", "info")
         data = _call_dify_api(message_text, phone_number=phone_number)
+        add_log(f"Dify 响应: {json.dumps(data, ensure_ascii=False)[:300]}", "info")
+
         answer = process_reply_text(_parse_dify_output(data))
 
         # 保存 Dify 返回的 conversation_id（对话模式下用于维持上下文）
@@ -737,7 +764,17 @@ def process_with_bailian(message_text, phone_number=None):
             user_session = user_session_manager.get_user_session(phone_number)
             session_id = user_session.get("conversation_id", "")
 
+        request_data = {
+            "input": {"prompt": message_text},
+            "parameters": {},
+            "debug": {},
+        }
+        if session_id:
+            request_data["input"]["session_id"] = session_id
+
+        add_log(f"百炼请求: {json.dumps(request_data, ensure_ascii=False)[:200]}", "info")
         data = _call_bailian_api(message_text, session_id=session_id)
+        add_log(f"百炼响应: {json.dumps(data, ensure_ascii=False)[:300]}", "info")
 
         if "output" not in data or "text" not in data["output"]:
             add_log(f"百炼响应格式异常: {data}", "error")
