@@ -272,6 +272,8 @@ def test_dify_connection():
     if not config.get("dify_api_key"):
         return False, "Dify API 密钥未设置"
 
+    app_mode = config.get("dify_app_mode", "chat")
+
     try:
         url = f"{config['dify_base_url'].rstrip('/')}/chat-messages"
         request_data = {
@@ -401,7 +403,10 @@ def _call_dify_api(message_text, phone_number=None):
     app_mode = config.get("dify_app_mode", "chat")
     user_id = ""
     conversation_id = ""
-
+    add_log(f"Dify 请求参数: {message_text}", "info")
+    add_log(f"Dify 请求模式: {app_mode}", "info")
+    add_log(f"Dify 请求头: {headers}", "info")
+    add_log(f"Dify phone_number: {phone_number}", "info")
     if phone_number:
         user_session = user_session_manager.get_user_session(phone_number)
         user_id = user_session.get("user_id", "")
@@ -419,11 +424,12 @@ def _call_dify_api(message_text, phone_number=None):
         "user": user_id,
     }
 
-    add_log(f"请求 Dify {app_mode} streaming API: {url}, user={user_id}, msg_len={len(message_text)}", "info")
     start_time = time.time()
     try:
         # streaming 模式下用 stream=True，timeout=(连接, 单次读取)
         # 单次读取 60s：只要服务器持续推送事件就不会超时
+        add_log(f"Dify 请求数据: {request_data}", "info")
+        add_log(f"Dify 请求URL: {url}", "info")
         response = requests.post(url, headers=headers, json=request_data, stream=True, timeout=(10, 60))
         response.raise_for_status()
 
@@ -472,15 +478,6 @@ def process_with_dify(message_text, phone_number=None):
             conversation_id = user_session.get("conversation_id", "")
         user_id = user_id or "default-user"
 
-        request_data = {
-            "inputs": {},
-            "query": message_text,
-            "response_mode": "streaming",
-            "conversation_id": conversation_id,
-            "user": user_id,
-        }
-
-        add_log(f"Dify 请求: {json.dumps(request_data, ensure_ascii=False)[:200]}", "info")
         data = _call_dify_api(message_text, phone_number=phone_number)
         add_log(f"Dify 响应: {json.dumps(data, ensure_ascii=False)[:300]}", "info")
 
@@ -1150,7 +1147,7 @@ def debug_llm():
                 "conversation_id": "",
                 "user": "debug-user",
             }
-
+            add_log(f"调试请求数据: {request_data}", "info")
             add_log("调试请求成功 (Dify)", "success")
             return jsonify(
                 {
